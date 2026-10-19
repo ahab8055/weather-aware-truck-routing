@@ -581,46 +581,76 @@ Routing errors (geocoding, ORS) return the same sanitized error bodies as the ca
 
 ## Deployment
 
-No hosting platform has been chosen and nothing is deployed. The two apps deploy separately.
+The two apps deploy as **separate Vercel projects** (Root Directory `backend/` and
+`frontend/`). Django is detected automatically from `manage.py` / `config.wsgi`.
 
-**Backend** (any host with Python 3.11+):
+### Backend on Vercel
+
+1. In the Vercel dashboard: **Add New Project** → import this repo → set
+   **Root Directory** to `backend` → Framework Preset should be Django.
+2. Set environment variables (Production + Preview as needed):
+
+   | Variable | Example |
+   | --- | --- |
+   | `DJANGO_SECRET_KEY` | long random string |
+   | `DJANGO_DEBUG` | `False` |
+   | `DJANGO_ALLOWED_HOSTS` | your custom API host, if any (`.vercel.app` deployment URL is added automatically via `VERCEL_URL`) |
+   | `CORS_ALLOWED_ORIGINS` | `https://your-frontend.vercel.app` (exact frontend origin, no trailing slash) |
+   | `ORS_API_KEY` | OpenRouteService token |
+   | `ORS_GEOCODE_COUNTRY` | empty for worldwide, or e.g. `US` / `PK` |
+   | `DJANGO_SECURE_SSL_REDIRECT` | `true` (optional) |
+   | `DJANGO_SECURE_HSTS_SECONDS` | `31536000` (optional) |
+
+   `DJANGO_SECURE_PROXY_SSL_HEADER` defaults to on when `VERCEL=1`. SQLite lives under
+   `/tmp` and is migrated on cold start (built-in Django tables only; no domain persistence).
+3. Deploy. `backend/vercel.json` sets `maxDuration` to 300 s so long evaluations can finish.
+4. Smoke-test: `curl https://<api>.vercel.app/api/health/` → `{"status":"ok"}`.
+
+Or from the CLI (Root Directory = `backend`):
+
+```bash
+cd backend
+vercel          # first time: link / create project
+vercel env add  # or set vars in the dashboard
+vercel --prod
+```
+
+**Alternative: any host with Python 3.11+** (gunicorn):
 
 ```bash
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-# environment (no .env file needed in production; set real env vars):
-#   DJANGO_SECRET_KEY=<long random>   DJANGO_DEBUG=False
-#   DJANGO_ALLOWED_HOSTS=api.your-domain   CORS_ALLOWED_ORIGINS=https://app.your-domain
-#   ORS_API_KEY=<key>   ORS_GEOCODE_COUNTRY=<empty for worldwide, or US|PK|...>
-#   DJANGO_SECURE_SSL_REDIRECT=true DJANGO_SECURE_HSTS_SECONDS=31536000
-#   DJANGO_SECURE_PROXY_SSL_HEADER=true   # only behind a TLS-terminating proxy
-.venv/bin/python manage.py migrate        # SQLite tables for Django's built-in apps only
+# same env vars as above, plus DJANGO_SECURE_PROXY_SSL_HEADER=true behind TLS proxy
+.venv/bin/python manage.py migrate
 .venv/bin/python manage.py check --deploy
 .venv/bin/gunicorn config.wsgi --bind 0.0.0.0:8000 --workers 3 --timeout 120
 ```
 
-- `--timeout 120`: an evaluation can make several ORS and Open-Meteo calls (worst case well
-  over a minute when providers are slow). Keep the proxy timeout at least this long.
-- The API serves JSON only. Admin and static files are not needed, so `collectstatic` and
-  WhiteNoise are not configured.
+- Keep proxy / function timeouts ≥ 120 s (evaluations call ORS and Open-Meteo sequentially).
+- The API serves JSON only. Admin and static files are not needed for the product UI.
 - With HTTPS enabled, `check --deploy` still reports W005 and W021 (HSTS include-subdomains
   and preload). Those are domain-wide policy choices, left to the operator.
 
-**Frontend** (any static host or CDN):
+### Frontend on Vercel
+
+1. Separate Vercel project, **Root Directory** `frontend`.
+2. Set `VITE_API_BASE_URL=https://<your-backend>.vercel.app/api` (baked in at build time).
+3. Redeploy the frontend after the backend URL is known. Update the backend
+   `CORS_ALLOWED_ORIGINS` to match the frontend origin.
 
 ```bash
 cd frontend
 npm ci
-VITE_API_BASE_URL=https://api.your-domain/api npm run build   # baked in at build time
-# serve frontend/dist/ as static files (single page, no server rendering)
+VITE_API_BASE_URL=https://api.your-domain/api npm run build
+# or: vercel --prod  (with VITE_API_BASE_URL set in the project env)
 ```
 
 **Checklist:**
-- [ ] Backend env set; `DJANGO_DEBUG=False`; new secret key; `check --deploy` passes apart from W005/W021
-- [ ] `DJANGO_ALLOWED_HOSTS` = backend hostname; `CORS_ALLOWED_ORIGINS` = exact frontend origin(s)
+- [ ] Backend env set; `DJANGO_DEBUG=False`; new secret key; health check returns ok
+- [ ] `CORS_ALLOWED_ORIGINS` = exact frontend origin(s); custom hosts in `DJANGO_ALLOWED_HOSTS` if used
 - [ ] `ORS_API_KEY` set as a server secret (never as a `VITE_` variable); `ORS_GEOCODE_COUNTRY` empty (worldwide) or set to the operating country
 - [ ] Frontend built with the production `VITE_API_BASE_URL`; served over HTTPS
-- [ ] Proxy and gunicorn timeouts ≥ 120 s
+- [ ] Function / proxy timeouts ≥ 120 s (Vercel backend uses 300 s via `vercel.json`)
 - [ ] Live verification below completed against the deployed URLs
 
 ## Live verification (needs an ORS key)

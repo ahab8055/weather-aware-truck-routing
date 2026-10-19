@@ -39,6 +39,12 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 
+# Vercel sets VERCEL=1 and VERCEL_URL (hostname without scheme) on every deployment.
+ON_VERCEL = bool(os.environ.get("VERCEL"))
+vercel_url = os.environ.get("VERCEL_URL", "").strip()
+if vercel_url and vercel_url not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(vercel_url)
+
 CORS_ALLOWED_ORIGINS = env_list(
     "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
 )
@@ -50,7 +56,8 @@ CSRF_COOKIE_SECURE = not DEBUG
 # HTTPS hardening for deployments; all off by default so local HTTP keeps working.
 SECURE_SSL_REDIRECT = env_bool("DJANGO_SECURE_SSL_REDIRECT", default=False)
 SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "0"))
-if env_bool("DJANGO_SECURE_PROXY_SSL_HEADER", default=False):
+# Vercel terminates TLS and sets X-Forwarded-Proto; enable by default there.
+if env_bool("DJANGO_SECURE_PROXY_SSL_HEADER", default=ON_VERCEL):
     # Only enable behind a proxy that sets X-Forwarded-Proto and strips client-supplied values.
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
@@ -112,10 +119,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 
 # SQLite backs Django's built-in apps only; the domain has no persisted models.
+# On Vercel the deployment filesystem is read-only, so use /tmp (ephemeral per instance).
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": "/tmp/db.sqlite3" if ON_VERCEL else BASE_DIR / "db.sqlite3",
     }
 }
 
